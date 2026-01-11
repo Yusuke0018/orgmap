@@ -6,43 +6,22 @@ import { Building2, Settings, ChevronDown } from 'lucide-react';
 import { MapCard, CreateMapCard, CreateMapModal } from '@/components/dashboard';
 import { ConfirmDialog, toast } from '@/components/common';
 import { useUserStore } from '@/stores/userStore';
-import { generateId } from '@/lib/utils';
+import {
+  subscribeToMaps,
+  createMap,
+  deleteMap,
+  duplicateMap,
+  updateMap,
+} from '@/lib/firestore';
 import type { OrgMap } from '@/types';
-
-// Demo data for development (will be replaced with Firestore)
-const demoMaps: OrgMap[] = [
-  {
-    id: '1',
-    name: '大阪院',
-    createdBy: 'demo',
-    createdAt: new Date('2025-01-01'),
-    updatedAt: new Date('2025-01-11'),
-    memberCount: 18,
-  },
-  {
-    id: '2',
-    name: '横浜院',
-    createdBy: 'demo',
-    createdAt: new Date('2025-01-01'),
-    updatedAt: new Date('2025-01-10'),
-    memberCount: 12,
-  },
-  {
-    id: '3',
-    name: '北堀江皮膚科',
-    createdBy: 'demo',
-    createdAt: new Date('2025-01-01'),
-    updatedAt: new Date('2025-01-09'),
-    memberCount: 8,
-  },
-];
 
 export default function DashboardPage() {
   const router = useRouter();
-  const { nickname, isAuthenticated } = useUserStore();
+  const { userId, nickname, isAuthenticated } = useUserStore();
   const [maps, setMaps] = useState<OrgMap[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [isCreating, setIsCreating] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [selectedMapId, setSelectedMapId] = useState<string | null>(null);
   const [showUserMenu, setShowUserMenu] = useState(false);
@@ -54,42 +33,30 @@ export default function DashboardPage() {
       return;
     }
 
-    // Load maps (using demo data for now)
-    const loadMaps = async () => {
-      setIsLoading(true);
-      try {
-        // TODO: Replace with Firestore query
-        setMaps(demoMaps);
-      } catch (error) {
-        console.error('Error loading maps:', error);
-        toast.error('マップの読み込みに失敗しました');
-      } finally {
-        setIsLoading(false);
-      }
-    };
+    // Subscribe to maps with real-time updates
+    setIsLoading(true);
+    const unsubscribe = subscribeToMaps((updatedMaps) => {
+      setMaps(updatedMaps);
+      setIsLoading(false);
+    });
 
-    loadMaps();
+    return () => unsubscribe();
   }, [isAuthenticated, router]);
 
   const handleCreateMap = async (name: string) => {
-    try {
-      const newMap: OrgMap = {
-        id: generateId(),
-        name,
-        createdBy: 'current-user',
-        createdAt: new Date(),
-        updatedAt: new Date(),
-        memberCount: 0,
-      };
+    if (!userId) return;
 
-      // TODO: Save to Firestore
-      setMaps([...maps, newMap]);
+    setIsCreating(true);
+    try {
+      const mapId = await createMap({ name, createdBy: userId });
       setShowCreateModal(false);
       toast.success(`「${name}」を作成しました`);
-      router.push(`/map/${newMap.id}`);
+      router.push(`/map/${mapId}`);
     } catch (error) {
       console.error('Error creating map:', error);
       toast.error('マップの作成に失敗しました');
+    } finally {
+      setIsCreating(false);
     }
   };
 
@@ -97,8 +64,7 @@ export default function DashboardPage() {
     if (!selectedMapId) return;
 
     try {
-      // TODO: Delete from Firestore
-      setMaps(maps.filter((m) => m.id !== selectedMapId));
+      await deleteMap(selectedMapId);
       toast.success('マップを削除しました');
     } catch (error) {
       console.error('Error deleting map:', error);
@@ -113,17 +79,8 @@ export default function DashboardPage() {
     if (!original) return;
 
     try {
-      const newMap: OrgMap = {
-        ...original,
-        id: generateId(),
-        name: `${original.name} (コピー)`,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      };
-
-      // TODO: Save to Firestore
-      setMaps([...maps, newMap]);
-      toast.success(`「${newMap.name}」を作成しました`);
+      await duplicateMap(id, `${original.name} (コピー)`);
+      toast.success(`「${original.name} (コピー)」を作成しました`);
     } catch (error) {
       console.error('Error duplicating map:', error);
       toast.error('マップの複製に失敗しました');
@@ -132,12 +89,7 @@ export default function DashboardPage() {
 
   const handleRenameMap = async (id: string, newName: string) => {
     try {
-      // TODO: Update in Firestore
-      setMaps(
-        maps.map((m) =>
-          m.id === id ? { ...m, name: newName, updatedAt: new Date() } : m
-        )
-      );
+      await updateMap(id, { name: newName });
       toast.success('名前を変更しました');
     } catch (error) {
       console.error('Error renaming map:', error);
@@ -188,7 +140,6 @@ export default function DashboardPage() {
                     <button
                       className="w-full px-4 py-2 text-left text-sm hover:bg-gray-50"
                       onClick={() => {
-                        // TODO: Open settings
                         setShowUserMenu(false);
                       }}
                     >
@@ -257,6 +208,7 @@ export default function DashboardPage() {
         isOpen={showCreateModal}
         onClose={() => setShowCreateModal(false)}
         onSubmit={handleCreateMap}
+        isLoading={isCreating}
       />
 
       {/* Delete Confirmation Dialog */}

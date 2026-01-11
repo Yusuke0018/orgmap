@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useMemo, use } from 'react';
+import { useState, useCallback, useMemo, useEffect, use } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   ReactFlow,
@@ -30,6 +30,7 @@ import {
   Share2,
   Check,
   User,
+  Loader2,
 } from 'lucide-react';
 import { Button, toast, Modal, Input } from '@/components/common';
 import {
@@ -39,104 +40,22 @@ import {
   AddNode,
   UnassignedMembersPanel,
 } from '@/components/map';
-import { useMapStore } from '@/stores/mapStore';
-import { generateId, copyToClipboard, getShareUrl } from '@/lib/utils';
-import type { OrgNode, UnassignedMember, OrgMap } from '@/types';
-
-// Demo data
-const demoMap: OrgMap = {
-  id: 'demo',
-  name: '大阪院',
-  createdBy: 'demo',
-  createdAt: new Date(),
-  updatedAt: new Date(),
-};
-
-const demoNodes: OrgNode[] = [
-  {
-    id: 'cat-1',
-    type: 'category',
-    name: '医師',
-    parentId: null,
-    order: 0,
-    createdAt: new Date(),
-    updatedAt: new Date(),
-  },
-  {
-    id: 'cat-2',
-    type: 'category',
-    name: '看護',
-    parentId: null,
-    order: 1,
-    createdAt: new Date(),
-    updatedAt: new Date(),
-  },
-  {
-    id: 'cat-3',
-    type: 'category',
-    name: '事務',
-    parentId: null,
-    order: 2,
-    createdAt: new Date(),
-    updatedAt: new Date(),
-  },
-  {
-    id: 'member-1',
-    type: 'member',
-    name: '大岩祐介',
-    role: '院長',
-    parentId: 'cat-1',
-    order: 0,
-    createdAt: new Date(),
-    updatedAt: new Date(),
-  },
-  {
-    id: 'member-2',
-    type: 'member',
-    name: '田中一郎',
-    role: '医師',
-    parentId: 'cat-1',
-    order: 1,
-    createdAt: new Date(),
-    updatedAt: new Date(),
-  },
-  {
-    id: 'member-3',
-    type: 'member',
-    name: '佐藤花子',
-    role: '師長',
-    parentId: 'cat-2',
-    order: 0,
-    createdAt: new Date(),
-    updatedAt: new Date(),
-  },
-  {
-    id: 'member-4',
-    type: 'member',
-    name: '山田',
-    role: '看護師',
-    parentId: 'cat-2',
-    order: 1,
-    createdAt: new Date(),
-    updatedAt: new Date(),
-  },
-  {
-    id: 'member-5',
-    type: 'member',
-    name: '鈴木次郎',
-    role: '事務長',
-    parentId: 'cat-3',
-    order: 0,
-    createdAt: new Date(),
-    updatedAt: new Date(),
-  },
-];
-
-const demoUnassigned: UnassignedMember[] = [
-  { id: 'u1', name: '高橋', createdAt: new Date() },
-  { id: 'u2', name: '伊藤', createdAt: new Date() },
-  { id: 'u3', name: '渡辺', createdAt: new Date() },
-];
+import { useUserStore } from '@/stores/userStore';
+import { copyToClipboard, getShareUrl } from '@/lib/utils';
+import {
+  getMap,
+  updateMap,
+  subscribeToNodes,
+  subscribeToUnassignedMembers,
+  addNode,
+  updateNode,
+  deleteNode,
+  addUnassignedMember,
+  deleteUnassignedMember,
+  getHistory,
+  addHistoryEntry,
+} from '@/lib/firestore';
+import type { OrgNode, UnassignedMember, OrgMap, HistoryEntry } from '@/types';
 
 // Node types for React Flow
 const nodeTypes = {
@@ -177,7 +96,7 @@ function buildFlowElements(
 
   // Get categories (nodes with null parentId)
   const categories = orgNodes
-    .filter((n) => n.parentId === null)
+    .filter((n) => n.parentId === null && n.type === 'category')
     .sort((a, b) => a.order - b.order);
 
   let categoryY = ROOT_Y - ((categories.length - 1) * VERTICAL_SPACING) / 2;
@@ -189,7 +108,6 @@ function buildFlowElements(
 
     const isCollapsed = collapsedNodes.has(category.id);
 
-    // Category node
     flowNodes.push({
       id: category.id,
       type: 'categoryNode',
@@ -275,29 +193,72 @@ export default function MapEditorPage({
 }) {
   const { mapId } = use(params);
   const router = useRouter();
+  const { userId, nickname } = useUserStore();
 
   // State
-  const [mapName, setMapName] = useState(demoMap.name);
+  const [map, setMap] = useState<OrgMap | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
   const [isEditingName, setIsEditingName] = useState(false);
-  const [orgNodes, setOrgNodes] = useState<OrgNode[]>(demoNodes);
-  const [unassignedMembers, setUnassignedMembers] =
-    useState<UnassignedMember[]>(demoUnassigned);
+  const [orgNodes, setOrgNodes] = useState<OrgNode[]>([]);
+  const [unassignedMembers, setUnassignedMembers] = useState<UnassignedMember[]>([]);
   const [collapsedNodes, setCollapsedNodes] = useState<Set<string>>(new Set());
   const [showAddMemberModal, setShowAddMemberModal] = useState(false);
   const [showHistoryPanel, setShowHistoryPanel] = useState(false);
+  const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [isSaved, setIsSaved] = useState(true);
-  const [draggedMember, setDraggedMember] = useState<UnassignedMember | null>(
-    null
-  );
+  const [draggedMember, setDraggedMember] = useState<UnassignedMember | null>(null);
   const [newMemberName, setNewMemberName] = useState('');
   const [newMemberRole, setNewMemberRole] = useState('');
+
+  // Load map and subscribe to updates
+  useEffect(() => {
+    const loadMap = async () => {
+      try {
+        const mapData = await getMap(mapId);
+        if (!mapData) {
+          toast.error('マップが見つかりません');
+          router.push('/dashboard');
+          return;
+        }
+        setMap(mapData);
+      } catch (error) {
+        console.error('Error loading map:', error);
+        toast.error('マップの読み込みに失敗しました');
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    loadMap();
+
+    // Subscribe to nodes
+    const unsubNodes = subscribeToNodes(mapId, (nodes) => {
+      setOrgNodes(nodes);
+      setIsSaved(true);
+    });
+
+    // Subscribe to unassigned members
+    const unsubMembers = subscribeToUnassignedMembers(mapId, (members) => {
+      setUnassignedMembers(members);
+    });
+
+    return () => {
+      unsubNodes();
+      unsubMembers();
+    };
+  }, [mapId, router]);
+
+  // Load history when panel opens
+  useEffect(() => {
+    if (showHistoryPanel) {
+      getHistory(mapId).then(setHistory).catch(console.error);
+    }
+  }, [showHistoryPanel, mapId]);
 
   // DnD sensors
   const sensors = useSensors(
     useSensor(PointerSensor, {
-      activationConstraint: {
-        distance: 5,
-      },
+      activationConstraint: { distance: 5 },
     })
   );
 
@@ -314,56 +275,101 @@ export default function MapEditorPage({
     });
   }, []);
 
-  const handleEditCategory = useCallback((id: string, name: string) => {
-    setOrgNodes((prev) =>
-      prev.map((n) => (n.id === id ? { ...n, name, updatedAt: new Date() } : n))
-    );
-    setIsSaved(false);
-    toast.success('カテゴリ名を更新しました');
-  }, []);
+  const handleEditCategory = useCallback(
+    async (id: string, name: string) => {
+      try {
+        await updateNode(mapId, id, { name });
+        await addHistoryEntry(mapId, {
+          userId: userId || 'anonymous',
+          userName: nickname || '匿名',
+          action: 'rename',
+          targetType: 'category',
+          targetName: name,
+          detail: `カテゴリ名を「${name}」に変更`,
+        });
+        toast.success('カテゴリ名を更新しました');
+      } catch (error) {
+        console.error('Error updating category:', error);
+        toast.error('更新に失敗しました');
+      }
+    },
+    [mapId, userId, nickname]
+  );
 
-  const handleEditRole = useCallback((id: string, role: string) => {
-    setOrgNodes((prev) =>
-      prev.map((n) => (n.id === id ? { ...n, role, updatedAt: new Date() } : n))
-    );
-    setIsSaved(false);
-    toast.success('役職を更新しました');
-  }, []);
+  const handleEditRole = useCallback(
+    async (id: string, role: string) => {
+      try {
+        const node = orgNodes.find((n) => n.id === id);
+        await updateNode(mapId, id, { role });
+        await addHistoryEntry(mapId, {
+          userId: userId || 'anonymous',
+          userName: nickname || '匿名',
+          action: 'rename',
+          targetType: 'member',
+          targetName: node?.name || '',
+          detail: `役職を「${role}」に変更`,
+        });
+        toast.success('役職を更新しました');
+      } catch (error) {
+        console.error('Error updating role:', error);
+        toast.error('更新に失敗しました');
+      }
+    },
+    [mapId, orgNodes, userId, nickname]
+  );
 
-  const handleAddCategory = useCallback((parentId: string, name: string) => {
-    const newCategory: OrgNode = {
-      id: generateId(),
-      type: 'category',
-      name,
-      parentId: null,
-      order: 999,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    };
-    setOrgNodes((prev) => [...prev, newCategory]);
-    setIsSaved(false);
-    toast.success(`「${name}」を追加しました`);
-  }, []);
+  const handleAddCategory = useCallback(
+    async (parentId: string, name: string) => {
+      try {
+        const order = orgNodes.filter((n) => n.parentId === null).length;
+        await addNode(mapId, {
+          type: 'category',
+          name,
+          parentId: null,
+          order,
+        });
+        await addHistoryEntry(mapId, {
+          userId: userId || 'anonymous',
+          userName: nickname || '匿名',
+          action: 'add',
+          targetType: 'category',
+          targetName: name,
+          detail: `カテゴリ「${name}」を追加`,
+        });
+        toast.success(`「${name}」を追加しました`);
+      } catch (error) {
+        console.error('Error adding category:', error);
+        toast.error('追加に失敗しました');
+      }
+    },
+    [mapId, orgNodes, userId, nickname]
+  );
 
-  const handleAddMember = useCallback(() => {
+  const handleAddMember = useCallback(async () => {
     if (!newMemberName.trim()) return;
 
-    const newMember: UnassignedMember = {
-      id: generateId(),
-      name: newMemberName.trim(),
-      createdAt: new Date(),
-    };
-
-    setUnassignedMembers((prev) => [...prev, newMember]);
-    setNewMemberName('');
-    setNewMemberRole('');
-    setShowAddMemberModal(false);
-    setIsSaved(false);
-    toast.success(`「${newMember.name}」を追加しました`);
-  }, [newMemberName]);
+    try {
+      await addUnassignedMember(mapId, { name: newMemberName.trim() });
+      await addHistoryEntry(mapId, {
+        userId: userId || 'anonymous',
+        userName: nickname || '匿名',
+        action: 'add',
+        targetType: 'member',
+        targetName: newMemberName.trim(),
+        detail: `メンバー「${newMemberName.trim()}」を追加`,
+      });
+      toast.success(`「${newMemberName.trim()}」を追加しました`);
+      setNewMemberName('');
+      setNewMemberRole('');
+      setShowAddMemberModal(false);
+    } catch (error) {
+      console.error('Error adding member:', error);
+      toast.error('追加に失敗しました');
+    }
+  }, [mapId, newMemberName, userId, nickname]);
 
   const handleDragEnd = useCallback(
-    (event: DragEndEvent) => {
+    async (event: DragEndEvent) => {
       const { active, over } = event;
 
       if (!over) return;
@@ -371,39 +377,42 @@ export default function MapEditorPage({
       const member = unassignedMembers.find((m) => m.id === active.id);
       if (!member) return;
 
-      // Find the category node that was dropped on
       const targetId = over.id.toString();
-
-      // Check if target is a category
       const targetCategory = orgNodes.find(
         (n) => n.id === targetId && n.type === 'category'
       );
 
       if (targetCategory) {
-        // Add member to the category
-        const newMemberNode: OrgNode = {
-          id: generateId(),
-          type: 'member',
-          name: member.name,
-          role: '',
-          iconUrl: member.iconUrl,
-          chatworkAccountId: member.chatworkAccountId,
-          parentId: targetCategory.id,
-          order: orgNodes.filter((n) => n.parentId === targetCategory.id)
-            .length,
-          createdAt: new Date(),
-          updatedAt: new Date(),
-        };
-
-        setOrgNodes((prev) => [...prev, newMemberNode]);
-        setUnassignedMembers((prev) => prev.filter((m) => m.id !== member.id));
-        setIsSaved(false);
-        toast.success(`「${member.name}」を「${targetCategory.name}」に配置しました`);
+        try {
+          const order = orgNodes.filter((n) => n.parentId === targetCategory.id).length;
+          await addNode(mapId, {
+            type: 'member',
+            name: member.name,
+            role: '',
+            iconUrl: member.iconUrl,
+            chatworkAccountId: member.chatworkAccountId,
+            parentId: targetCategory.id,
+            order,
+          });
+          await deleteUnassignedMember(mapId, member.id);
+          await addHistoryEntry(mapId, {
+            userId: userId || 'anonymous',
+            userName: nickname || '匿名',
+            action: 'move',
+            targetType: 'member',
+            targetName: member.name,
+            detail: `「${member.name}」を「${targetCategory.name}」に配置`,
+          });
+          toast.success(`「${member.name}」を「${targetCategory.name}」に配置しました`);
+        } catch (error) {
+          console.error('Error placing member:', error);
+          toast.error('配置に失敗しました');
+        }
       }
 
       setDraggedMember(null);
     },
-    [orgNodes, unassignedMembers]
+    [mapId, orgNodes, unassignedMembers, userId, nickname]
   );
 
   const handleShare = async () => {
@@ -416,11 +425,16 @@ export default function MapEditorPage({
     }
   };
 
-  const handleNameChange = (newName: string) => {
-    if (newName.trim() && newName !== mapName) {
-      setMapName(newName.trim());
-      setIsSaved(false);
-      toast.success('マップ名を更新しました');
+  const handleNameChange = async (newName: string) => {
+    if (newName.trim() && newName !== map?.name) {
+      try {
+        await updateMap(mapId, { name: newName.trim() });
+        setMap((prev) => (prev ? { ...prev, name: newName.trim() } : prev));
+        toast.success('マップ名を更新しました');
+      } catch (error) {
+        console.error('Error updating map name:', error);
+        toast.error('更新に失敗しました');
+      }
     }
     setIsEditingName(false);
   };
@@ -429,7 +443,7 @@ export default function MapEditorPage({
   const { nodes: flowNodes, edges: flowEdges } = useMemo(
     () =>
       buildFlowElements(
-        mapName,
+        map?.name || 'マップ',
         orgNodes,
         {
           onToggleCollapse: handleToggleCollapse,
@@ -440,7 +454,7 @@ export default function MapEditorPage({
         collapsedNodes
       ),
     [
-      mapName,
+      map?.name,
       orgNodes,
       collapsedNodes,
       handleToggleCollapse,
@@ -453,8 +467,7 @@ export default function MapEditorPage({
   const [nodes, setNodes, onNodesChange] = useNodesState(flowNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(flowEdges);
 
-  // Update nodes when flow elements change
-  useMemo(() => {
+  useEffect(() => {
     setNodes(flowNodes);
     setEdges(flowEdges);
   }, [flowNodes, flowEdges, setNodes, setEdges]);
@@ -466,16 +479,20 @@ export default function MapEditorPage({
     [setEdges]
   );
 
+  if (isLoading) {
+    return (
+      <div className="h-screen flex items-center justify-center bg-[var(--background)]">
+        <Loader2 className="w-8 h-8 animate-spin text-[var(--primary)]" />
+      </div>
+    );
+  }
+
   return (
     <DndContext
       sensors={sensors}
       onDragStart={(event) => {
-        const member = unassignedMembers.find(
-          (m) => m.id === event.active.id
-        );
-        if (member) {
-          setDraggedMember(member);
-        }
+        const member = unassignedMembers.find((m) => m.id === event.active.id);
+        if (member) setDraggedMember(member);
       }}
       onDragEnd={handleDragEnd}
     >
@@ -493,14 +510,11 @@ export default function MapEditorPage({
             {isEditingName ? (
               <input
                 type="text"
-                defaultValue={mapName}
+                defaultValue={map?.name}
                 onBlur={(e) => handleNameChange(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    handleNameChange(e.currentTarget.value);
-                  } else if (e.key === 'Escape') {
-                    setIsEditingName(false);
-                  }
+                  if (e.key === 'Enter') handleNameChange(e.currentTarget.value);
+                  else if (e.key === 'Escape') setIsEditingName(false);
                 }}
                 className="text-lg font-bold border-b-2 border-[var(--primary)] outline-none bg-transparent"
                 autoFocus
@@ -510,7 +524,7 @@ export default function MapEditorPage({
                 className="text-lg font-bold text-[var(--text-primary)] cursor-pointer hover:text-[var(--primary)]"
                 onClick={() => setIsEditingName(true)}
               >
-                {mapName}
+                {map?.name}
               </h1>
             )}
 
@@ -635,10 +649,34 @@ export default function MapEditorPage({
                   ×
                 </button>
               </div>
-              <div className="p-4">
-                <p className="text-[var(--text-secondary)] text-sm text-center py-8">
-                  履歴はまだありません
-                </p>
+              <div className="p-4 overflow-y-auto h-[calc(100%-60px)]">
+                {history.length === 0 ? (
+                  <p className="text-[var(--text-secondary)] text-sm text-center py-8">
+                    履歴はまだありません
+                  </p>
+                ) : (
+                  <div className="space-y-3">
+                    {history.map((entry) => (
+                      <div
+                        key={entry.id}
+                        className="p-3 bg-gray-50 rounded-lg text-sm"
+                      >
+                        <p className="text-[var(--text-primary)]">
+                          {entry.detail}
+                        </p>
+                        <p className="text-xs text-[var(--text-secondary)] mt-1">
+                          {entry.userName} ・{' '}
+                          {entry.timestamp.toLocaleString('ja-JP', {
+                            month: 'numeric',
+                            day: 'numeric',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          })}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           </>

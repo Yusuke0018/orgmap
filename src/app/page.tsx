@@ -1,18 +1,30 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { Building2, ArrowRight, Check, Users, Share2, Zap } from 'lucide-react';
-import { Button, Modal, Input } from '@/components/common';
+import { Building2, ArrowRight, Check, Users, Share2, Zap, Loader2 } from 'lucide-react';
+import { Button, Modal, Input, toast } from '@/components/common';
 import { useUserStore } from '@/stores/userStore';
-import { generateId } from '@/lib/utils';
 
 export default function LandingPage() {
   const router = useRouter();
-  const { isAuthenticated, setUser } = useUserStore();
+  const { isAuthenticated, isLoading: authLoading, login, initAuth } = useUserStore();
   const [showNicknameModal, setShowNicknameModal] = useState(false);
   const [nickname, setNickname] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+
+  // Initialize Firebase auth listener
+  useEffect(() => {
+    const unsubscribe = initAuth();
+    return () => unsubscribe();
+  }, [initAuth]);
+
+  // Redirect if already authenticated
+  useEffect(() => {
+    if (!authLoading && isAuthenticated) {
+      router.push('/dashboard');
+    }
+  }, [isAuthenticated, authLoading, router]);
 
   const handleStart = () => {
     if (isAuthenticated) {
@@ -28,11 +40,11 @@ export default function LandingPage() {
 
     setIsLoading(true);
     try {
-      const userId = generateId();
-      setUser(userId, nickname.trim());
+      await login(nickname.trim());
       router.push('/dashboard');
     } catch (error) {
       console.error('Error:', error);
+      toast.error('ログインに失敗しました');
     } finally {
       setIsLoading(false);
     }
@@ -55,6 +67,15 @@ export default function LandingPage() {
       description: 'Chatworkからメンバー情報を自動取得できます',
     },
   ];
+
+  // Show loading while checking auth
+  if (authLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-b from-blue-50 to-white">
+        <Loader2 className="w-8 h-8 animate-spin text-[var(--primary)]" />
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-blue-50 to-white">

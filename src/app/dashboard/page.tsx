@@ -2,8 +2,8 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { Building2, Settings, ChevronDown } from 'lucide-react';
-import { MapCard, CreateMapCard, CreateMapModal } from '@/components/dashboard';
+import { Building2, Settings, ChevronDown, MessageSquare } from 'lucide-react';
+import { MapCard, CreateMapCard, CreateMapModal, ChatworkSettingsModal } from '@/components/dashboard';
 import { ConfirmDialog, toast } from '@/components/common';
 import { useUserStore } from '@/stores/userStore';
 import {
@@ -25,6 +25,7 @@ export default function DashboardPage() {
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [selectedMapId, setSelectedMapId] = useState<string | null>(null);
   const [showUserMenu, setShowUserMenu] = useState(false);
+  const [showChatworkSettings, setShowChatworkSettings] = useState(false);
 
   // Redirect to home if not authenticated
   useEffect(() => {
@@ -112,8 +113,12 @@ export default function DashboardPage() {
           </div>
 
           <div className="flex items-center gap-4">
-            <button className="p-2 text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-gray-100 rounded-lg transition-colors">
-              <Settings className="w-5 h-5" />
+            <button
+              onClick={() => setShowChatworkSettings(true)}
+              className="p-2 text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-gray-100 rounded-lg transition-colors"
+              title="Chatwork連携設定"
+            >
+              <MessageSquare className="w-5 h-5" />
             </button>
 
             <div className="relative">
@@ -148,8 +153,8 @@ export default function DashboardPage() {
                     <hr className="my-1 border-[var(--border)]" />
                     <button
                       className="w-full px-4 py-2 text-left text-sm hover:bg-gray-50 text-[var(--danger)]"
-                      onClick={() => {
-                        useUserStore.getState().logout();
+                      onClick={async () => {
+                        await useUserStore.getState().logout();
                         router.push('/');
                       }}
                     >
@@ -223,6 +228,12 @@ export default function DashboardPage() {
         message={`この操作は取り消せません。\n${selectedMap?.memberCount || 0}人のメンバー情報も削除されます。`}
         confirmText="削除"
         variant="danger"
+      />
+
+      {/* Chatwork Settings Modal */}
+      <ChatworkSettingsModal
+        isOpen={showChatworkSettings}
+        onClose={() => setShowChatworkSettings(false)}
       />
     </div>
   );

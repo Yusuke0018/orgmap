@@ -31,6 +31,7 @@ import {
   Check,
   User,
   Loader2,
+  MessageSquare,
 } from 'lucide-react';
 import { Button, toast, Modal, Input } from '@/components/common';
 import {
@@ -39,7 +40,9 @@ import {
   MemberNode,
   AddNode,
   UnassignedMembersPanel,
+  ChatworkImportModal,
 } from '@/components/map';
+import { ChatworkSettingsModal } from '@/components/dashboard';
 import { useUserStore } from '@/stores/userStore';
 import { copyToClipboard, getShareUrl } from '@/lib/utils';
 import {
@@ -209,6 +212,8 @@ export default function MapEditorPage({
   const [draggedMember, setDraggedMember] = useState<UnassignedMember | null>(null);
   const [newMemberName, setNewMemberName] = useState('');
   const [newMemberRole, setNewMemberRole] = useState('');
+  const [showChatworkImport, setShowChatworkImport] = useState(false);
+  const [showChatworkSettings, setShowChatworkSettings] = useState(false);
 
   // Load map and subscribe to updates
   useEffect(() => {
@@ -540,6 +545,14 @@ export default function MapEditorPage({
             <Button
               variant="secondary"
               size="sm"
+              leftIcon={<MessageSquare className="w-4 h-4" />}
+              onClick={() => setShowChatworkImport(true)}
+            >
+              Chatwork
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
               leftIcon={<UserPlus className="w-4 h-4" />}
               onClick={() => setShowAddMemberModal(true)}
             >
@@ -703,6 +716,20 @@ export default function MapEditorPage({
             </div>
           )}
         </DragOverlay>
+
+        {/* Chatwork Import Modal */}
+        <ChatworkImportModal
+          isOpen={showChatworkImport}
+          onClose={() => setShowChatworkImport(false)}
+          mapId={mapId}
+          onOpenSettings={() => setShowChatworkSettings(true)}
+        />
+
+        {/* Chatwork Settings Modal */}
+        <ChatworkSettingsModal
+          isOpen={showChatworkSettings}
+          onClose={() => setShowChatworkSettings(false)}
+        />
       </div>
     </DndContext>
   );
